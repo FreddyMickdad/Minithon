@@ -1,4 +1,4 @@
-from typing import Callable, cast
+from typing import cast
 from minithon.common import CommonException
 from minithon.lexer import Token, TokenType
 from minithon.parser.types import (
@@ -25,8 +25,7 @@ class ICG:
         self.reg_count = 0
         self.label_count = 0
         self.identifier_to_register: dict[str, str] = {}
-        self.while_label = ""
-        self.while_exit_label = ""
+        self.loop_label_stack: list[tuple[str, str]] = []
         self.source_code: str
         self.reuse_registers: bool
 
@@ -41,7 +40,6 @@ class ICG:
         return self.intermediate_code
 
     def block(self, block: Block) -> None:
-        orig_reg_count = self.reg_count
         for stmt in block.statements:
             if isinstance(stmt, AssignmentStatement):
                 self.assignment_stmt(stmt)
@@ -51,68 +49,56 @@ class ICG:
                 self.while_stmt(stmt)
             else:
                 self.generic_stmt(stmt)
-        added_regs = [
-            f"r{reg}" for reg in range(orig_reg_count + 1, self.reg_count + 1)
-        ]
-        items = list(self.identifier_to_register.items())
-        for identifier, reg in items:
-            if reg in added_regs:
-                self.identifier_to_register.pop(identifier)
-        if self.reuse_registers:
-            self.reg_count = orig_reg_count
 
     def generic_stmt(
         self,
         stmt: GenericStatement,
     ) -> None:
-        if not self.while_label or not self.while_exit_label:
-            return
         if stmt.token.type == TokenType.CONTINUE:
-            self.update_intermediate_code(f"goto {self.while_label}")
+            if not self.loop_label_stack:
+                raise RuntimeError(
+                    "continue outside loop",
+                    self.source_code,
+                    stmt.token.position,
+                )
+            loop_label, _ = self.loop_label_stack[-1]
+            self.update_intermediate_code(f"goto {loop_label}")
         elif stmt.token.type == TokenType.BREAK:
-            self.update_intermediate_code(f"goto {self.while_exit_label}")
+            if not self.loop_label_stack:
+                raise RuntimeError(
+                    "break outside loop",
+                    self.source_code,
+                    stmt.token.position,
+                )
+            _, loop_exit_label = self.loop_label_stack[-1]
+            self.update_intermediate_code(f"goto {loop_exit_label}")
 
     def while_stmt(self, stmt: ControlFlowStmtBlock) -> None:
-        self.while_label = self.get_label()
-        self.update_intermediate_code(f"{self.while_label}:")
+        loop_label = self.get_label()
+        loop_exit_label = self.get_label()
+        self.loop_label_stack.append((loop_label, loop_exit_label))
+        self.update_intermediate_code(f"{loop_label}:")
         stmt.expression = cast(Expression, stmt.expression)
         reg = self.expression_register(stmt.expression)
-        self.while_exit_label = self.get_label()
-        self.update_intermediate_code(f"if (!{reg}) goto {self.while_exit_label}")
+        self.update_intermediate_code(f"if (!{reg}) goto {loop_exit_label}")
         self.block(stmt.block)
-        self.update_intermediate_code(f"goto {self.while_label}:")
-        self.update_intermediate_code(f"{self.while_exit_label}:")
+        self.update_intermediate_code(f"goto {loop_label}")
+        self.update_intermediate_code(f"{loop_exit_label}:")
+        self.loop_label_stack.pop()
 
     def if_stmt(self, stmt: IfStatementBlock) -> None:
-        def get_block(
-            stmt: ControlFlowStmtBlock, exit_label: str
-        ) -> Callable[[], None]:
-            if stmt.keyword.type != TokenType.ELSE:
-                stmt.expression = cast(Expression, stmt.expression)
-                reg = self.expression_register(stmt.expression)
-                label = self.get_label()
-                self.update_intermediate_code(f"if ({reg}) goto {label}")
-
-                def block() -> None:
-                    self.update_intermediate_code(f"{label}:")
-                    self.block(stmt.block)
-                    self.update_intermediate_code(f"goto {exit_label}")
-            else:
-
-                def block() -> None:
-                    self.block(stmt.block)
-
-            return block
-
         exit_label = self.get_label()
-        blocks: list[Callable[[], None]] = []
-        blocks.append(get_block(stmt.if_statement, exit_label))
-        for elif_ in stmt.elif_statements:
-            blocks.append(get_block(elif_, exit_label))
+        conditional_blocks = [stmt.if_statement, *stmt.elif_statements]
+        for conditional_block in conditional_blocks:
+            false_label = self.get_label()
+            conditional_block.expression = cast(Expression, conditional_block.expression)
+            reg = self.expression_register(conditional_block.expression)
+            self.update_intermediate_code(f"if (!{reg}) goto {false_label}")
+            self.block(conditional_block.block)
+            self.update_intermediate_code(f"goto {exit_label}")
+            self.update_intermediate_code(f"{false_label}:")
         if stmt.else_statement is not None:
-            blocks.append(get_block(stmt.else_statement, exit_label))
-        for b in blocks:
-            b()
+            self.block(stmt.else_statement.block)
         self.update_intermediate_code(f"{exit_label}:")
 
     def get_label(self) -> str:
@@ -151,7 +137,14 @@ class ICG:
             return self.expression_register(operand)
 
         left_reg = operand_register(expr.left_operand)
-        if expr.right_operand is None or expr.operator is None:
+        if expr.operator is None:
+            return left_reg
+        if expr.operator.type == TokenType.NOT and expr.right_operand is None:
+            if reg is None:
+                reg = self.get_register()
+            self.update_intermediate_code(f"{reg} = !{left_reg}")
+            return reg
+        if expr.right_operand is None:
             return left_reg
         right_reg = operand_register(expr.right_operand)
         if reg is None:
@@ -161,8 +154,6 @@ class ICG:
             operator = "|"
         elif expr.operator.type == TokenType.AND:
             operator = "&"
-        elif expr.operator.type == TokenType.NOT:
-            operator = "!"
         self.update_intermediate_code(f"{reg} = {left_reg} {operator} {right_reg}")
         return reg
 

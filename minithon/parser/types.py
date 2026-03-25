@@ -1,8 +1,6 @@
 from typing import Any, Sequence
-import colorama
 from minithon.common import CommonException
 from minithon.lexer import Token
-from PrettyPrint import PrettyPrintTree
 
 
 class SyntaxError(CommonException):
@@ -158,6 +156,12 @@ class Program(NodeWrapper):
 
     def print_parse_tree(self, pretty=True) -> None:
         if not pretty:
+            print(self.node.dirty_tree_str())
+            return
+        try:
+            import colorama
+            from PrettyPrint import PrettyPrintTree
+        except ModuleNotFoundError:
             print(self.node.dirty_tree_str())
             return
 

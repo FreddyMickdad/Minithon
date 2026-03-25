@@ -1,14 +1,19 @@
-from PrettyPrint.PrintLinkedList.LinkedListPrinter import Callable
-from minithon.icg import ICG
-from minithon.lexer import Token, tokenize
+from typing import Callable
+import sys
 from pprint import pprint
 from pathlib import Path
 import time
 
+CURR_ROOT_DIR = Path(__file__).parent
+PROJECT_ROOT_DIR = CURR_ROOT_DIR.parent
+
+if str(PROJECT_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT_DIR))
+
+from minithon.icg import ICG
+from minithon.lexer import Token, tokenize
 from minithon.parser.main import Parser
 from minithon.parser.types import Program
-
-CURR_ROOT_DIR = Path(__file__).parent
 
 
 def get_source_code() -> str:
@@ -48,7 +53,7 @@ def test_lexer(
 def test_parser(source_code: str | None = None, show_output=True) -> Program:
     if source_code is None:
         source_code = get_source_code()
-    tokens = test_lexer(source_code, True, True)
+    tokens = test_lexer(source_code, show_output, True)
     parser = Parser(tokens, source_code)
     prt = print_runtime_later("Parser")
     program = parser.parse()
@@ -61,7 +66,7 @@ def test_parser(source_code: str | None = None, show_output=True) -> Program:
 def test_icg(source_code: str | None = None, show_output=True) -> str:
     if source_code is None:
         source_code = get_source_code()
-    program = test_parser(source_code, True)
+    program = test_parser(source_code, show_output)
     icg = ICG()
     prt = print_runtime_later("Intermediate Code Generator")
     intermediate_code = icg.generate(program, source_code)

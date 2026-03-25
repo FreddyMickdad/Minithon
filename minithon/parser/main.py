@@ -45,21 +45,23 @@ class Parser:
             while self.match(TokenType.NEWLINE, False, False):
                 indent = 0
         self.token_index = token_index
-        self.current_token = self.tokens[token_index]
+        if 0 <= token_index < len(self.tokens):
+            self.current_token = self.tokens[token_index]
         return indent
 
     def block(self, prev_indent: int) -> Block | None:
         indent = self.get_indent()
+        # Nested blocks must increase indentation compared to parent.
+        if prev_indent >= 0 and indent <= prev_indent:
+            return None
         self.block_id += 1
         block_id_buffer = self.block_id
         statements: list[StatementType] = []
-        statement = self.statement(indent)
-        while statement is not None:
-            statements.append(statement)
-            new_indent = self.get_indent()
-            if new_indent < indent:
-                break
+        while self.get_indent() == indent:
             statement = self.statement(indent)
+            if statement is None:
+                break
+            statements.append(statement)
         if not statements:
             self.block_id -= 1
             return None
@@ -70,7 +72,7 @@ class Parser:
     def match(
         self, token_type: TokenType, ignore_newline=True, ignore_whitespace=True
     ) -> bool:
-        if self.token_index > len(self.tokens):
+        if self.token_index + 1 >= len(self.tokens):
             return False
         self.token_index += 1
         self.current_token = self.tokens[self.token_index]
@@ -87,7 +89,8 @@ class Parser:
         if matched:
             return True
         self.token_index -= 1
-        self.current_token = self.tokens[self.token_index]
+        if 0 <= self.token_index < len(self.tokens):
+            self.current_token = self.tokens[self.token_index]
         return False
 
     def generic_statement(
@@ -171,43 +174,69 @@ class Parser:
             or self.match(TokenType.FLOAT)
         )
 
-    def expression(self) -> Expression | None:
-        def match_ops() -> bool:
-            return (
-                self.match(TokenType.OR)
-                or self.match(TokenType.AND)
-                or self.match(TokenType.NOT)
-                or self.match(TokenType.DIVIDE)
-                or self.match(TokenType.MULTIPLY)
-                or self.match(TokenType.ADD)
-                or self.match(TokenType.SUBTRACT)
-                or self.match(TokenType.EQUAL)
-                or self.match(TokenType.NOT_EQUAL)
-                or self.match(TokenType.MODULUS)
-                or self.match(TokenType.GREATER_THAN)
-                or self.match(TokenType.LESS_THAN)
-                or self.match(TokenType.GREATER_THAN_OR_EQUAL)
-                or self.match(TokenType.LESS_THAN_OR_EQUAL)
-            )
+    def match_any(self, token_types: list[TokenType]) -> bool:
+        for token_type in token_types:
+            if self.match(token_type):
+                return True
+        return False
 
-        left_operand: Expression | Token
+    def primary(self) -> Expression | Token | None:
         if self.match(TokenType.LPAREN):
-            expression = self.expression()
-            if expression is None:
+            inner_expression = self.expression()
+            if inner_expression is None:
                 self.raise_syntax_error("Expected expression")
-            left_operand = expression
             if not self.match(TokenType.RPAREN):
                 self.raise_syntax_error("Expected closing paranthesis")
-        else:
-            if not self.factor():
-                return None
-            left_operand = self.current_token
-        operator = None
-        right_operand = None
-        if match_ops():
+            return inner_expression
+        if self.factor():
+            return self.current_token
+        return None
+
+    def unary(self) -> Expression | Token | None:
+        if self.match(TokenType.NOT):
             operator = self.current_token
-            right_operand = self.expression()
-            if right_operand is None:
+            operand = self.unary()
+            if operand is None:
                 self.raise_syntax_error("Expected expression")
-        expression = Expression(left_operand, operator, right_operand)
-        return expression
+            return Expression(operand, operator, None)
+        return self.primary()
+
+    def parse_binary(self, parse_operand, operators: list[TokenType]) -> Expression | None:
+        left = parse_operand()
+        if left is None:
+            return None
+        while self.match_any(operators):
+            operator = self.current_token
+            right = parse_operand()
+            if right is None:
+                self.raise_syntax_error("Expected expression")
+            left = Expression(left, operator, right)
+        return left if isinstance(left, Expression) else Expression(left)
+
+    def term(self) -> Expression | None:
+        return self.parse_binary(
+            self.unary,
+            [TokenType.MULTIPLY, TokenType.DIVIDE, TokenType.MODULUS],
+        )
+
+    def arithmetic_expression(self) -> Expression | None:
+        return self.parse_binary(self.term, [TokenType.ADD, TokenType.SUBTRACT])
+
+    def comparison_expression(self) -> Expression | None:
+        return self.parse_binary(
+            self.arithmetic_expression,
+            [
+                TokenType.EQUAL,
+                TokenType.NOT_EQUAL,
+                TokenType.GREATER_THAN,
+                TokenType.LESS_THAN,
+                TokenType.GREATER_THAN_OR_EQUAL,
+                TokenType.LESS_THAN_OR_EQUAL,
+            ],
+        )
+
+    def and_expression(self) -> Expression | None:
+        return self.parse_binary(self.comparison_expression, [TokenType.AND])
+
+    def expression(self) -> Expression | None:
+        return self.parse_binary(self.and_expression, [TokenType.OR])

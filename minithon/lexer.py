@@ -75,7 +75,6 @@ class TokenType(Enum):
     # Misc
     PASS = r"\bpass\b"
     IDENTIFIER = r"[a-zA-Z_]\w*"
-    EOF = r"$"
 
 
 @cache
@@ -115,7 +114,7 @@ def tokenize(
             exceptions.append(e)
         kind = cast(str, match_object.lastgroup)
         value = match_object.group()
-        token = Token(value, TokenType[kind], pos)
+        token = Token(value, TokenType[kind], match_object.start())
         tokens.append(token)
         pos = match_object.end()
     if pos != len(code):
