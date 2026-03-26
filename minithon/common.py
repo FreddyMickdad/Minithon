@@ -1,5 +1,5 @@
 class CommonException(Exception):
-    def _init_(
+    def __init__(
         self, msg: str, source_code: str, position: int, print_token=True
     ) -> None:
         line_start_pos = (
@@ -21,6 +21,6 @@ class CommonException(Exception):
         final_err = f":\n{err}" if token else ""
         line_number = source_code[:position].count("\n") + 1
         token_str = f'\033[32m"{token}"\033[0m ' if print_token else ""
-        super()._init_(
+        super().__init__(
             f"\033[31m{msg} \033[0m{token_str}\033[31mat line {line_number}\033[0m{final_err}"
         )
